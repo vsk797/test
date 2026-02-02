@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import { Wallet, Users, TrendingUp, Gauge, Activity, Target, AlertTriangle, ListTodo, Building2 } from "lucide-react";
 import { KPICard } from "@/components/dashboard/KPICard";
 import { WaterfallChart } from "@/components/dashboard/WaterfallChart";
@@ -16,53 +16,31 @@ import { AIAssistant } from "@/components/dashboard/AIAssistant";
 import { TeamPerformanceCard } from "@/components/dashboard/TeamPerformanceCard";
 import { BankOverviewCard } from "@/components/dashboard/BankOverviewCard";
 import { 
-  loadHouseholdData, 
-  calculateOfficerMetrics, 
-  calculateTeamMetrics,
   applyOfficerFilters,
   formatCurrency,
-  HouseholdData,
-  OfficerMetrics,
-  TeamMetrics,
-  DataQualityIssue,
-  BankSummary
 } from "@/lib/data-processor";
+import { 
+  useRawHouseholds, 
+  useRawOfficers, 
+  useRawTeams, 
+  useDataQuality, 
+  useBankSummary 
+} from "@/hooks/useDashboardData";
 
 const Index = () => {
-  const [households, setHouseholds] = useState<HouseholdData[]>([]);
-  const [officers, setOfficers] = useState<OfficerMetrics[]>([]);
-  const [teams, setTeams] = useState<TeamMetrics[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [dataIssues, setDataIssues] = useState<DataQualityIssue[]>([]);
-  const [dataStats, setDataStats] = useState({ totalRows: 0, validRows: 0, filteredRows: 0 });
   const [filters, setFilters] = useState<FilterState>(DEFAULT_FILTERS);
-  const [bankSummary, setBankSummary] = useState<BankSummary | null>(null);
 
-  // Apply filters to officers
+  // Fetch data using TanStack Query hooks
+  const { data: households = [], isLoading: loadingHouseholds } = useRawHouseholds();
+  const { data: officers = [], isLoading: loadingOfficers } = useRawOfficers();
+  const { data: teams = [], isLoading: loadingTeams } = useRawTeams();
+  const { data: dataQuality, isLoading: loadingDQ } = useDataQuality();
+  const { data: bankSummary, isLoading: loadingBank } = useBankSummary();
+
+  const loading = loadingHouseholds || loadingOfficers || loadingTeams || loadingDQ || loadingBank;
+
+  // Apply filters to officers (Client-side for now, as per transition plan)
   const filteredOfficers = applyOfficerFilters(officers, filters);
-
-  useEffect(() => {
-    const loadData = async () => {
-      try {
-        const result = await loadHouseholdData();
-        const officerMetrics = calculateOfficerMetrics(result.data);
-        const teamMetrics = calculateTeamMetrics(officerMetrics);
-        
-        setHouseholds(result.data);
-        setOfficers(officerMetrics);
-        setTeams(teamMetrics);
-        setDataIssues(result.issues);
-        setDataStats(result.stats);
-        setBankSummary(result.bankSummary);
-      } catch (error) {
-        console.error("Failed to load data:", error);
-      } finally {
-        setLoading(false);
-      }
-    };
-
-    loadData();
-  }, []);
 
   if (loading) {
     return (
@@ -75,16 +53,16 @@ const Index = () => {
     );
   }
 
-  // Calculate KPIs
+  // Calculate KPIs (Logic currently remains client-side to support instant filtering)
+  // In the future, pass 'filters' to useKPIs() hook
   const totalDeposits = households.reduce((sum, h) => sum + h.currentBalance, 0);
   const priorDeposits = households.reduce((sum, h) => sum + h.priorBalance, 0);
   const momChange = households.reduce((sum, h) => sum + h.momChange, 0);
   const ytdChange = households.reduce((sum, h) => sum + h.ytdChange, 0);
   
   const momChangePercent = priorDeposits !== 0 ? (momChange / priorDeposits) * 100 : 0;
-  const ytdChangePercent = households.reduce((sum, h) => sum + h.ytdBalance, 0) !== 0 
-    ? (ytdChange / households.reduce((sum, h) => sum + h.ytdBalance, 0)) * 100 
-    : 0;
+  const ytdBalance = households.reduce((sum, h) => sum + h.ytdBalance, 0);
+  const ytdChangePercent = ytdBalance !== 0 ? (ytdChange / ytdBalance) * 100 : 0;
 
   // Cap extreme ratios to prevent outliers from skewing the average
   const RATIO_CAP = 500; // Cap at 500% for reasonable averaging
@@ -235,7 +213,7 @@ const Index = () => {
             <AlertTriangle className="h-6 w-6 text-amber-500" />
             <h2 className="text-2xl font-bold text-foreground">Data Quality Report</h2>
           </div>
-          <DataQualityReport issues={dataIssues} stats={dataStats} />
+          <DataQualityReport issues={dataQuality?.issues || []} stats={dataQuality?.stats || { totalRows: 0, validRows: 0, filteredRows: 0 }} />
         </div>
       </main>
 

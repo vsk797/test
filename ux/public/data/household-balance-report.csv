@@ -1,0 +1,3 @@
+Transaction Date,Account Number,Description,Debit,Credit,Category,Household ID,Household Name,Officer Code,Officer Name,Current Month-end Deposit Balance,Prior Month-end Deposit Balance,Prior Year-end Deposit Balance
+2024-01-15,123456789,Deposit,0,5000,Income,100001,Smith Family,OFF001,Sarah Jenkins,150000,145000,120000
+2024-01-20,987654321,Utility Bill,200,0,Utilities,100002,Jones Family,OFF002,Mike Ross,80000,80200,75000

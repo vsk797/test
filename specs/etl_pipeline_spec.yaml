@@ -1,0 +1,85 @@
+version: 1.0.0
+name: Oxford Nexus ETL Pipeline
+description: Nightly batch pipeline to ingest, clean, and aggregate banking data.
+
+schedule:
+  cron: "0 2 * * *"
+  timezone: "America/New_York"
+
+infrastructure:
+  runner: Azure Container Apps Jobs
+  language: Python 3.13
+  libraries: [duckdb, polars, delta-rs, pydantic, azure-identity]
+
+stages:
+  - name: ingestion
+    description: Extract data from SharePoint and load to Bronze.
+    steps:
+      - id: fetch_excel
+        action: download_file
+        source: sharepoint/drive/items/{file_id}
+        target: /tmp/household-balance-report.xlsx
+      
+      - id: raw_load
+        tool: duckdb
+        query: |
+          INSERT INTO delta_scan('abfss://bronze/raw_household_balances')
+          SELECT uuid() as ingestion_id, 
+                 to_json(row) as raw_content, 
+                 'household-balance-report.xlsx' as source_filename, 
+                 current_timestamp as ingestion_timestamp
+          FROM st_read('/tmp/household-balance-report.xlsx')
+
+  - name: silver_transformation
+    description: Cleanse and validate data.
+    steps:
+      - id: validate_schema
+        tool: pydantic
+        model: HouseholdSchema
+        action: validate_rows
+        input: bronze/raw_household_balances
+        on_error: quarantine_row
+
+      - id: dedup_and_merge
+        tool: polars
+        action: merge
+        target: silver/households
+        logic: |
+          Upsert based on household_id and as_of_date.
+          Prioritize latest ingestion_timestamp.
+
+  - name: gold_aggregation
+    description: Build semantic models and KPIs.
+    steps:
+      - id: build_facts
+        tool: duckdb
+        query: |
+          CREATE OR REPLACE TABLE gold.fact_household_monthly AS
+          SELECT 
+            strftime(as_of_date, '%Y%m') as date_key,
+            household_id,
+            officer_code,
+            balance_current,
+            (balance_current - balance_prior_month) as net_flow_mom
+          FROM silver.households
+
+      - id: calc_kpis
+        tool: duckdb
+        query: |
+          INSERT INTO gold.agg_kpi_daily
+          SELECT 
+            as_of_date as report_date,
+            'total_deposits' as kpi_name,
+            'Bank' as dimension_type,
+            'All' as dimension_value,
+            SUM(balance_current) as value
+          FROM silver.households
+          GROUP BY 1
+
+  - name: data_quality
+    description: Run post-pipeline checks.
+    steps:
+      - id: check_freshness
+        assertion: max(ingestion_timestamp) > now() - 24h
+      - id: check_volatility
+        assertion: abs(sum(net_flow_mom)) < (sum(total_deposits) * 0.10)

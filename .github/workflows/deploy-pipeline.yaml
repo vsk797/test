@@ -1,0 +1,87 @@
+name: Deploy Infrastructure and Backend
+
+on:
+  push:
+    branches: [ main ]
+    paths:
+      - 'backend/**'
+      - 'infra/**'
+      - '.github/workflows/**'
+  workflow_dispatch:
+
+permissions:
+  id-token: write
+  contents: read
+
+env:
+  AZURE_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
+  AZURE_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
+  AZURE_SUBSCRIPTION_ID: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+  RESOURCE_GROUP_NAME: rg-oxford-nexus-dev
+  LOCATION: eastus2
+  ENV_NAME: dev
+
+jobs:
+  build-and-push:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+
+      - name: Azure Login
+        uses: azure/login@v1
+        with:
+          client-id: ${{ env.AZURE_CLIENT_ID }}
+          tenant-id: ${{ env.AZURE_TENANT_ID }}
+          subscription-id: ${{ env.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Deploy Bicep (Infra)
+        id: bicep
+        uses: azure/arm-deploy@v1
+        with:
+          scope: subscription
+          region: ${{ env.LOCATION }}
+          subscriptionId: ${{ env.AZURE_SUBSCRIPTION_ID }}
+          template: ./infra/main.bicep
+          parameters: environmentName=${{ env.ENV_NAME }} location=${{ env.LOCATION }}
+
+      - name: Get ACR Login Server
+        run: |
+          ACR_LOGIN_SERVER=$(az acr list --resource-group ${{ env.RESOURCE_GROUP_NAME }} --query "[0].loginServer" -o tsv)
+          echo "ACR_LOGIN_SERVER=$ACR_LOGIN_SERVER" >> $GITHUB_ENV
+
+      - name: Login to ACR
+        run: az acr login --name ${{ env.ACR_LOGIN_SERVER }}
+
+      - name: Build and Push Docker Image
+        run: |
+          docker build -t ${{ env.ACR_LOGIN_SERVER }}/oxford-nexus-backend:${{ github.sha }} -f backend/Dockerfile .
+          docker tag ${{ env.ACR_LOGIN_SERVER }}/oxford-nexus-backend:${{ github.sha }} ${{ env.ACR_LOGIN_SERVER }}/oxford-nexus-backend:latest
+          docker push ${{ env.ACR_LOGIN_SERVER }}/oxford-nexus-backend:${{ github.sha }}
+          docker push ${{ env.ACR_LOGIN_SERVER }}/oxford-nexus-backend:latest
+
+  update-job:
+    needs: build-and-push
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+
+      - name: Azure Login
+        uses: azure/login@v1
+        with:
+          client-id: ${{ env.AZURE_CLIENT_ID }}
+          tenant-id: ${{ env.AZURE_TENANT_ID }}
+          subscription-id: ${{ env.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Update Container App Job Image
+        run: |
+          # Retrieve ACR name and Job name dynamically if needed, or hardcode for dev env convention
+          JOB_NAME="job-etl-${{ env.ENV_NAME }}"
+          ACR_LOGIN_SERVER=$(az acr list --resource-group ${{ env.RESOURCE_GROUP_NAME }} --query "[0].loginServer" -o tsv)
+          IMAGE="${ACR_LOGIN_SERVER}/oxford-nexus-backend:${{ github.sha }}"
+          
+          echo "Updating Job $JOB_NAME with image $IMAGE"
+          
+          az containerapp job update \
+            --name $JOB_NAME \
+            --resource-group ${{ env.RESOURCE_GROUP_NAME }} \
+            --image $IMAGE

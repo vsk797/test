@@ -1,0 +1,124 @@
+version: 1.0.0
+domain: Oxford Nexus
+description: Data model specification for the Oxford Nexus Lakehouse (Bronze -> Silver -> Gold).
+
+layers:
+  bronze:
+    description: Raw immutable snapshots from source systems (SharePoint/Excel).
+    format: delta
+    tables:
+      - name: raw_household_balances
+        source: sharepoint/household-balance-report.xlsx
+        partition_by: [ingestion_date]
+        columns:
+          - name: ingestion_id
+            type: string
+            description: UUID for the ingestion batch
+          - name: raw_content
+            type: json
+            description: Full row as JSON from Excel
+          - name: source_filename
+            type: string
+          - name: ingestion_timestamp
+            type: timestamp
+
+  silver:
+    description: Cleaned, validated, and typed data with enforced schemas.
+    format: delta
+    tables:
+      - name: households
+        primary_key: household_id
+        columns:
+          - name: household_id
+            type: string
+            validation: regex(^\d{6,10}$)
+          - name: household_name
+            type: string
+          - name: officer_code
+            type: string
+            foreign_key: officers.officer_code
+          - name: balance_current
+            type: decimal(18,2)
+          - name: balance_prior_month
+            type: decimal(18,2)
+          - name: balance_ytd_start
+            type: decimal(18,2)
+          - name: as_of_date
+            type: date
+
+      - name: officers
+        primary_key: officer_code
+        columns:
+          - name: officer_code
+            type: string
+          - name: officer_name
+            type: string
+          - name: team_id
+            type: string
+            foreign_key: teams.team_id
+          - name: status
+            type: string
+            enum: [Active, Inactive]
+
+      - name: teams
+        primary_key: team_id
+        columns:
+          - name: team_id
+            type: string
+            enum: [BB, OCF, PB]
+          - name: team_name
+            type: string
+
+  gold:
+    description: Semantic model for consumption by FastAPI (Facts & Dimensions).
+    format: delta
+    tables:
+      - name: fact_household_monthly
+        description: Monthly snapshots of household performance.
+        granularity: monthly
+        columns:
+          - name: date_key
+            type: integer
+            example: 202401
+          - name: household_key
+            type: string
+          - name: officer_key
+            type: string
+          - name: team_key
+            type: string
+          - name: total_deposits
+            type: decimal(18,2)
+          - name: net_flow_mom
+            type: decimal(18,2)
+            formula: balance_current - balance_prior_month
+          - name: net_flow_ytd
+            type: decimal(18,2)
+            formula: balance_current - balance_ytd_start
+
+      - name: dim_officer
+        description: Slowly Changing Dimension (Type 2) for officers.
+        columns:
+          - name: officer_key
+            type: string
+          - name: current_team
+            type: string
+          - name: effective_date
+            type: date
+          - name: end_date
+            type: date
+
+      - name: agg_kpi_daily
+        description: Pre-calculated daily KPIs for the dashboard.
+        columns:
+          - name: report_date
+            type: date
+          - name: kpi_name
+            type: string
+            enum: [total_deposits, net_flow_mom, liquidity_ratio]
+          - name: dimension_type
+            type: string
+            enum: [Bank, Team, Officer]
+          - name: dimension_value
+            type: string
+          - name: value
+            type: decimal(18,2)

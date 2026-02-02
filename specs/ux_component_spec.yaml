@@ -1,0 +1,106 @@
+version: 1.0.0
+app_name: Oxford Nexus Web App
+framework: React 18 + Vite + TypeScript
+description: Component specification mapping UI elements to Backend APIs.
+
+components:
+  - name: KPICard
+    file: src/components/dashboard/KPICard.tsx
+    description: Displays high-level metrics (Total Deposits, Net Flow).
+    api_dependency:
+      endpoint: GET /api/v1/kpis
+      params: 
+        - date
+        - team_id
+        - officer_id
+      response_schema:
+        total_deposits: number
+        net_flow_mom: number
+        liquidity_ratio: number
+        trends:
+          total_deposits_pct: number
+    props:
+      title: string
+      value: string
+      change: number
+      trend: string
+
+  - name: WaterfallChart
+    file: src/components/dashboard/WaterfallChart.tsx
+    description: Visualizes flow from Start -> In/Out -> End.
+    api_dependency:
+      endpoint: GET /api/v1/analytics/waterfall
+      params:
+        - start_date
+        - end_date
+      response_schema:
+        start_balance: number
+        increases: number
+        decreases: number
+        end_balance: number
+        details: 
+          type: array
+          items:
+            category: string
+            value: number
+
+  - name: OfficerLeaderboard
+    file: src/components/dashboard/OfficerLeaderboard.tsx
+    description: Ranked list of officers by performance.
+    api_dependency:
+      endpoint: GET /api/v1/officers/leaderboard
+      params:
+        - metric
+        - sort
+      response_schema:
+        data:
+          type: array
+          items:
+            officer_id: string
+            name: string
+            team: string
+            balance: number
+            growth_ytd: number
+
+  - name: DashboardFilters
+    file: src/components/dashboard/DashboardFilters.tsx
+    description: Global filter state controls.
+    api_dependency:
+      endpoint: GET /api/v1/metadata/filters
+      response_schema:
+        teams: 
+          type: array
+          items: string
+        officers: 
+          type: array
+          items:
+            id: string
+            name: string
+            team: string
+        balance_tiers: 
+          type: array
+          items: string
+
+  - name: NarrativeCard
+    file: src/components/dashboard/NarrativeCard.tsx
+    description: AI-generated summary of the current view.
+    api_dependency:
+      endpoint: POST /api/v1/ai/narrative
+      body:
+        context_data: object
+      response_schema:
+        markdown_text: string
+        highlighted_entities: 
+          type: array
+          items: string
+
+gap_analysis:
+  current_state:
+    - Data loading is monolithic (loadHouseholdData in Index.tsx).
+    - Logic for MoM/YTD calculation happens in src/lib/data-processor.ts.
+    - No API client exists; data is passed via props from Index.tsx.
+  
+  target_state:
+    - Components should use TanStack Query hooks.
+    - Calculation logic moves to Python/SQL (Gold Layer).
+    - data-processor.ts should be deprecated in favor of API schemas.
